@@ -9,7 +9,7 @@ from dagster_duckdb import DuckDBResource
 @dg.asset
 def pt_townsand_live(database: DuckDBResource) -> None:
     """
-      Pulling real-time water level data for Port Townsand, WA. Loads into database
+      Pulling real-time water level data for Port Townsand, WA. Loads into database.
     """
     url = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?'\
         'date=today&station=9444900&'\
@@ -27,32 +27,33 @@ def pt_townsand_live(database: DuckDBResource) -> None:
         conn.execute(query)
 
 
-"""
+@dg.asset(
+    deps=["pt_townsand_live"]
+)
+def pt_townsand_clean(database: DuckDBResource) -> None:
+    """
+      Appending a clean-up verion of the water level data into a database.
+    """
 
-# cleanup
-df['datetime'] = pd.to_datetime(df['t'])
-#df = df.drop(columns=['t'])
-df = df.rename(columns={
-    'v': 'value',
-    's': 'sigma',
-    'f': 'data_flags',
-    'q': 'quality_level'
-})
-df['value'] = df['value'].astype(float)
+    with database.get_connection() as conn:
+        pt_df = conn.execute("SELECT * FROM pt_townsand_raw").fetch_df()
 
-# error flags
-df[['scatter', 'flat', 'rate_of_change', 'bounds']] = df['data_flags'].str.split(',', expand=True).astype(int)
-df['flag_summary'] = df['scatter'] + df['rate_of_change'] + df['flat'] + df['bounds']
+    # cleanup
+    pt_df['datetime'] = pd.to_datetime(pt_df['t'])
+    #df = df.drop(columns=['t'])
+    pt_df = pt_df.rename(columns={
+        'v': 'value',
+        's': 'sigma',
+        'f': 'data_flags',
+        'q': 'quality_level'
+    })
+    pt_df['value'] = pt_df['value'].astype(float)
 
+    # error flags
+    pt_df[['scatter', 'flat', 'rate_of_change', 'bounds']] = pt_df['data_flags'].str.split(',', expand=True).astype(int)
+    pt_df['flag_summary'] = pt_df['scatter'] + pt_df['rate_of_change'] + pt_df['flat'] + pt_df['bounds']
 
-# plot as report
-ax = df.loc[df['flag_summary'] == 0].plot.scatter(x='datetime', y='value', s=7, label='good')
-df.loc[df['scatter'] != 0].plot.scatter(x='datetime', y='value', ax=ax, color='red', s=1, label='scatter')
-df.loc[df['flat'] != 0].plot.scatter(x='datetime', y='value', ax=ax, color='yellow', s=1, label='flat')
-df.loc[df['rate_of_change'] != 0].plot.scatter(x='datetime', y='value', ax=ax, color='green', s=1, label='rate_of_change')
-df.loc[df['bounds'] != 0].plot.scatter(x='datetime', y='value', ax=ax, color='cyan', s=1, label='bounds')
-ax.legend()
-ax.tick_params("x", rotation=45)
-ax.set_ylabel('Water Level (ft)')
-ax.set_xlabel('Time')
-"""
+    query = "CREATE OR REPLACE TABLE pt_townsand_clean AS SELECT * FROM pt_df"
+
+    with database.get_connection() as conn:
+        conn.execute(query)
